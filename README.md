@@ -22,3 +22,7 @@ go get github.com/okcredit/devcli
 ```
 go install github.com/okcredit/devcli
 ```
+
+## Configure
+
+1. Copy `config-template.yaml` to `config.yaml` and add required mapping details
