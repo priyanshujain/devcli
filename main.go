@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sync"
+	"syscall"
 
 	"gopkg.in/yaml.v2"
 )
@@ -65,9 +67,8 @@ func checkDuplicateLocalPorts(config Config) bool {
 }
 
 func connectBastion(ctx context.Context, bastion Bastion, connection Connection) *exec.Cmd {
-	sshCmd := exec.CommandContext(ctx, "gcloud", "compute", "ssh", bastion.Name, "--zone", bastion.Zone, "--", "-L", fmt.Sprintf("localhost:%d:%s:%d", connection.LocalPort, connection.RemoteHost, connection.RemotePort))
+	sshCmd := exec.CommandContext(ctx, "gcloud", "compute", "ssh", bastion.Name, "--zone", bastion.Zone, "--", "-L", fmt.Sprintf("localhost:%d:%s:%d", connection.LocalPort, connection.RemoteHost, connection.RemotePort), "-t")
 	sshCmd.Stderr = os.Stderr
-	sshCmd.Stdin = os.Stdin
 	return sshCmd
 }
 
@@ -115,6 +116,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Listen for SIGINT and SIGTERM signals
+	ch := make(chan os.Signal, 2)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+
+	// Cancel the context when the program is interrupted
+	go func() {
+		<-ch
+		fmt.Println("Interrupted. Exiting...")
+		// Cancel the context
+		cancel()
+		<-ch
+		os.Exit(1)
+	}()
+
 	// Run the kubectl port-forward command for each rule
 	var wg sync.WaitGroup
 	for _, rule := range config.Rules {
@@ -129,7 +144,13 @@ func main() {
 			} else {
 				podName := string(out)
 				cmd = exec.CommandContext(ctx, "kubectl", "port-forward", fmt.Sprintf("--namespace=%s", rule.Namespace), podName, fmt.Sprintf("%d:%d", rule.LocalPort, rule.RemotePort))
+				cmd.Stderr = os.Stderr
+				fmt.Printf("Running kubectl port-forward for pod %s\n", podName)
 				if err := cmd.Run(); err != nil {
+					// If the context was canceled, don't print an error
+					if ctx.Err() != nil {
+						return
+					}
 					fmt.Printf("Error running kubectl port-forward for pod %s: %v\n", podName, err)
 				}
 			}
@@ -142,6 +163,10 @@ func main() {
 		fmt.Printf("Connecting to remote host %s via bastion server %s\n", connection.RemoteHost, config.Bastion.Name)
 		go func(connection Connection) {
 			if err := cmd.Run(); err != nil {
+				// If the context was canceled, don't print an error
+				if ctx.Err() != nil {
+					return
+				}
 				fmt.Printf("Error connecting to the remote host %s via bastion server %s: %v\n", connection.RemoteHost, config.Bastion.Name, err)
 			}
 		}(connection)
