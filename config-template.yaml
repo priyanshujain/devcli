@@ -1,11 +1,17 @@
-kubeconfig: /path/to/kubeconfig
-  name: bastion
-  zone: asia-south1-a
-  connections:
-    - local_port: 5434
-      remote_host: 10.116.48.59
-      remote_port: 5432
+# Description: This is a template for the config.yaml file. Copy this file to config.yaml and fill in the values.
 
+# Path to the kubeconfig file for the cluster
+kubeconfig: /path/to/kubeconfig
+
+# Bastion configuration
+name: bastion
+zone: asia-south1-a
+connections:
+  - local_port: 5434
+    remote_host: 10.116.48.59
+    remote_port: 5432
+
+# Port forwarding rules for the apps deployed in the cluster
 rules:
   - namespace: enr
     app: cashfree
