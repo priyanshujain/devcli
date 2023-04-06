@@ -1,0 +1,13 @@
+kubeconfig: /Users/priyanshujain/.kube/config
+bastion:
+  name: bastion
+  connections:
+    - local_port: 5434
+      remote_host: 10.120.52.48
+      remote_port: 5432
+
+rules:
+  - namespace: enr
+    app: cashfree
+    local_port: 8080
+    remote_port: 8080
