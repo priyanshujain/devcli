@@ -1,7 +1,14 @@
 
 # devcli
 
-devcli is a tool to connect to remote hosts for development usecases.
+devcli implements a command-line interface for the development of Kubernetes applications.
+
+It provides a simple way to forward local ports to remote ports on Kubernetes pods.
+It also provides a way to forward local ports to remote ports on a bastion server
+that is used to connect to pods. The configuration file contains the name of the
+bastion server, the name of the zone where the bastion server is located, the
+connections that will be forwarded through the bastion server, and the rules for
+port forwarding.
 
 ## Features
 1. Map staging apps to localhost 
