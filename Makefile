@@ -11,7 +11,7 @@ LDFLAGS=-ldflags "-X github.com/okcredit/devcli.Version=${VERSION} -X github.com
 .DEFAULT_GOAL: $(BINARY)
 
 $(BINARY): $(SOURCES)
-	go build ${LDFLAGS} -o ${BINARY} main.go
+	go build ${LDFLAGS} -o bin/${BINARY} main.go
 
 .PHONY: install
 install:
