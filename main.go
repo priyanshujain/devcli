@@ -19,6 +19,7 @@ type Connection struct {
 
 type Bastion struct {
 	Name        string       `yaml:"name"`
+	Zone        string       `yaml:"zone"`
 	Connections []Connection `yaml:"connections"`
 }
 
@@ -64,9 +65,9 @@ func checkDuplicateLocalPorts(config Config) bool {
 }
 
 func connectBastion(ctx context.Context, bastion Bastion, connection Connection) *exec.Cmd {
-	sshCmd := exec.CommandContext(ctx, "gcloud", "compute", "ssh", bastion.Name, "--", "-L", fmt.Sprintf("localhost:%d:%s:%d", connection.LocalPort, connection.RemoteHost, connection.RemotePort))
-	fmt.Println(sshCmd.String())
+	sshCmd := exec.CommandContext(ctx, "gcloud", "compute", "ssh", bastion.Name, "--zone", bastion.Zone, "--", "-L", fmt.Sprintf("localhost:%d:%s:%d", connection.LocalPort, connection.RemoteHost, connection.RemotePort))
 	sshCmd.Stderr = os.Stderr
+	sshCmd.Stdin = os.Stdin
 	return sshCmd
 }
 

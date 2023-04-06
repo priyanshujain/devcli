@@ -1,9 +1,9 @@
-kubeconfig: /Users/priyanshujain/.kube/config
-bastion:
+kubeconfig: /path/to/kubeconfig
   name: bastion
+  zone: asia-south1-a
   connections:
     - local_port: 5434
-      remote_host: 10.120.52.48
+      remote_host: 10.116.48.59
       remote_port: 5432
 
 rules:
