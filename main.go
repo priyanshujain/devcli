@@ -123,10 +123,11 @@ func main() {
 	// Cancel the context when the program is interrupted
 	go func() {
 		<-ch
-		fmt.Println("Interrupted. Exiting...")
+		fmt.Println("Interrupted. Exiting gracefully...")
 		// Cancel the context
 		cancel()
 		<-ch
+		fmt.Println("Interrupted again. Exiting immediately...")
 		os.Exit(1)
 	}()
 

@@ -39,6 +39,10 @@ For mac users
 brew install --cask google-cloud-sdk
 ```
 
+```
+gcloud init
+```
+
 Run 
 
 ```
