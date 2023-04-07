@@ -72,3 +72,12 @@ func TestConnectBastion(t *testing.T) {
 		t.Error("connectBastion failed: the command is not properly configured.")
 	}
 }
+
+// test for checkPortAvailable
+func TestCheckPortAvailable(t *testing.T) {
+	port := 5434
+	result := checkPortAvailable(port)
+	if !result {
+		t.Error("checkPortAvailable failed: the port is not available.")
+	}
+}

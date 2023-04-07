@@ -72,6 +72,15 @@ func connectBastion(ctx context.Context, bastion Bastion, connection Connection)
 	return sshCmd
 }
 
+// checkPortAvailable checks if the port on local machine is available
+func checkPortAvailable(port int) bool {
+	cmd := exec.Command("lsof", "-i", fmt.Sprintf(":%d", port))
+	if err := cmd.Run(); err != nil {
+		return true
+	}
+	return false
+}
+
 func main() {
 	// Parse command line arguments
 	confFile := flag.String("conf", "", "Path to the configuration file")
@@ -114,6 +123,14 @@ func main() {
 	if checkDuplicateLocalPorts(config) {
 		fmt.Println("Error: there are duplicate local ports in the configuration file.")
 		os.Exit(1)
+	}
+
+	// check if the port on local machine is available
+	for _, rule := range config.Rules {
+		if !checkPortAvailable(rule.LocalPort) {
+			fmt.Printf("Error: port %d is not available on local machine.\n", rule.LocalPort)
+			os.Exit(1)
+		}
 	}
 
 	// Listen for SIGINT and SIGTERM signals
@@ -161,7 +178,7 @@ func main() {
 	// Connect to the bastion server and forward the connections
 	for _, connection := range config.Bastion.Connections {
 		cmd := connectBastion(ctx, config.Bastion, connection)
-		fmt.Printf("Connecting to remote host %s via bastion server %s\n", connection.RemoteHost, config.Bastion.Name)
+		fmt.Printf("Connecting to remote host %s via bastion server on port %d\n", connection.RemoteHost, connection.LocalPort)
 		go func(connection Connection) {
 			if err := cmd.Run(); err != nil {
 				// If the context was canceled, don't print an error
