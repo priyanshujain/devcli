@@ -32,10 +32,17 @@ type Rule struct {
 	RemotePort int    `yaml:"remote_port"`
 }
 
+type GCloudConfig struct {
+	Project    string `yaml:"project"`
+	ConfigPath string `yaml:"config_path"`
+}
+
 type Config struct {
-	Kubeconfig string  `yaml:"kubeconfig"`
-	Bastion    Bastion `yaml:"bastion"`
-	Rules      []Rule  `yaml:"rules"`
+	Kubeconfig  string       `yaml:"kubeconfig"`
+	GCloud      GCloudConfig `yaml:"gcloud"`
+	Bastion     Bastion      `yaml:"bastion"`
+	Rules       []Rule       `yaml:"rules"`
+	Environment string       `yaml:"environment"`
 }
 
 func checkKubectl(ctx context.Context) bool {
@@ -91,6 +98,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Read environment type from cmd line argument
+	environment := flag.String("env", "", "Environment type (dev, staging, prod)")
+	flag.Parse()
+
 	// Create a context that will be used to cancel the port-forward commands
 	// when the program is interrupted
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,8 +127,61 @@ func main() {
 		os.Exit(1)
 	}
 
+	// check if environment is set
+	if config.Environment == "" && *environment == "" {
+		fmt.Println("Error: environment is not set in the configuration file or passed as a command line argument.")
+		os.Exit(1)
+	} else if *environment != "" {
+		config.Environment = *environment
+	}
+
+	// get zone of the bastion instance using gcloud
+	cmd := exec.CommandContext(ctx, "gcloud", "compute", "instances", "describe", config.Bastion.Name, "--format", "value(zone)")
+	cmd.Stderr = os.Stderr
+	zone, err := cmd.Output()
+	if err != nil {
+		fmt.Println("Error getting zone of the bastion instance:", err)
+		os.Exit(1)
+	} else {
+		config.Bastion.Zone = string(zone)
+	}
+
 	// Set the KUBECONFIG environment variable
+	if config.Kubeconfig == "" {
+		fmt.Println("kubeconfig is not set in the configuration file.")
+		// get default kubeconfig path from home directory
+		fmt.Println("Using default kubeconfig path: $HOME/.kube/config")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Println("Error getting home directory:", err)
+			os.Exit(1)
+		}
+		config.Kubeconfig = fmt.Sprintf("%s/.kube/config", home)
+	}
 	os.Setenv("KUBECONFIG", config.Kubeconfig)
+
+	gcloudProjectName := config.GCloud.Project
+	gcloudConfigPath := config.GCloud.ConfigPath
+
+	// Set the CLOUDSDK_CONFIG environment variable
+	if gcloudConfigPath == "" {
+		fmt.Println("gcloud config path is not set in the configuration file.")
+		// get default gcloud config path from home directory
+		fmt.Println("Using default gcloud config path: $HOME/.config/gcloud")
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Println("Error getting home directory:", err)
+			os.Exit(1)
+		}
+		gcloudConfigPath = fmt.Sprintf("%s/.config/gcloud", home)
+	}
+	os.Setenv("CLOUDSDK_CONFIG", gcloudConfigPath)
+
+	// check if the project is set
+	if gcloudProjectName == "" {
+		fmt.Println("Error: project is not set in the configuration file.")
+		os.Exit(1)
+	}
 
 	// Check if there are duplicate local ports
 	if checkDuplicateLocalPorts(config) {
@@ -131,6 +195,50 @@ func main() {
 			fmt.Printf("Error: port %d is not available on local machine.\n", rule.LocalPort)
 			os.Exit(1)
 		}
+	}
+
+	// set gcloud project
+	cmd = exec.CommandContext(ctx, "gcloud", "config", "set", "project", gcloudProjectName)
+	if err := cmd.Run(); err != nil {
+		fmt.Println("Error setting gcloud project:", err)
+		os.Exit(1)
+	}
+
+	// get cluster list and set the first cluster as the default cluster
+	var defaultClusterName string
+	cmd = exec.CommandContext(ctx, "gcloud", "container", "clusters", "list", "--format", "value(name)")
+	if out, err := cmd.Output(); err != nil {
+		fmt.Println("Error getting cluster list:", err)
+		os.Exit(1)
+	} else {
+		defaultClusterName = string(out)
+		cmd = exec.CommandContext(ctx, "gcloud", "config", "set", "container/cluster", defaultClusterName)
+		if err := cmd.Run(); err != nil {
+			fmt.Println("Error setting gcloud cluster:", err)
+			os.Exit(1)
+		}
+	}
+
+	// get cluster region
+	var defaultClusterRegion string
+	cmd = exec.CommandContext(ctx, "gcloud", "container", "clusters", "list", "--format", "value(location)")
+	if out, err := cmd.Output(); err != nil {
+		fmt.Println("Error getting cluster region:", err)
+		os.Exit(1)
+	} else {
+		defaultClusterRegion = string(out)
+		cmd = exec.CommandContext(ctx, "gcloud", "config", "set", "compute/region", defaultClusterRegion)
+		if err := cmd.Run(); err != nil {
+			fmt.Println("Error setting gcloud region:", err)
+			os.Exit(1)
+		}
+	}
+
+	// get credentials for the default cluster
+	cmd = exec.CommandContext(ctx, "gcloud", "container", "clusters", "get-credentials", defaultClusterName)
+	if err := cmd.Run(); err != nil {
+		fmt.Println("Error getting cluster credentials:", err)
+		os.Exit(1)
 	}
 
 	// Listen for SIGINT and SIGTERM signals
