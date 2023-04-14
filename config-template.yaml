@@ -1,19 +1,43 @@
 # Description: This is a template for the config.yaml file. Copy this file to config.yaml and fill in the values.
 
-# Path to the kubeconfig file for the cluster
-kubeconfig: /path/to/kubeconfig
+environment: staging
 
-# Bastion configuration
-name: bastion
-zone: asia-south1-a
-connections:
-  - local_port: 5434
-    remote_host: 10.116.48.59
-    remote_port: 5432
+cloud:
+  kubeconfig: /path/to/your/kubeconfig.yaml
+  gcloudconfig: /path/to/your/gcloudconfig.yaml
 
-# Port forwarding rules for the apps deployed in the cluster
-rules:
-  - namespace: enr
-    app: cashfree
-    local_port: 8080
-    remote_port: 8080
+proxies:
+  - proxy:
+    environment: staging
+    cloud_project: okcredit-staging-env
+    bastion:
+      name: bastion
+      connections:
+        - local_port: 5435
+          remote_host: 10.120.52.48
+          remote_port: 5432
+        - local_port: 5434
+          remote_host: 10.116.48.59
+          remote_port: 5432
+        - local_port: 6378
+          remote_host: 10.116.50.3
+          remote_port: 6379
+    workloads:
+      - namespace: enr
+        app: cashfree
+        local_port: 8080
+        remote_port: 8080
+  - proxy:
+    environment: prod
+    cloud_project: okcredit-42
+    bastion:
+      name: bastion
+      connections:
+        - local_port: 5435
+          remote_host: 10.120.49.38
+          remote_port: 5432
+    workloads:
+      - namespace: enr
+        app: cashfree
+        local_port: 8080
+        remote_port: 8080
