@@ -80,17 +80,7 @@ gcloud components install kubectl
 ```
 
 
-3. Set auth credentials config for kubectl
+3. Install gcloud auth credentials plugin for gke
 ```
 gcloud components install gke-gcloud-auth-plugin
-```
-
-Add this to your profile:
-```
-export USE_GKE_GCLOUD_AUTH_PLUGIN=True
-```
-
-4. Set credentials for kubectl for given cluster
-```
-gcloud container clusters get-credentials --region=asia-south1 okc-cluster
 ```
