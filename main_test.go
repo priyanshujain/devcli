@@ -17,27 +17,59 @@ func TestCheckKubectl(t *testing.T) {
 	}
 }
 
+// test for check gcloud
+func TestCheckGcloud(t *testing.T) {
+	// context
+	ctx := context.Background()
+	result := checkGcloud(ctx)
+	if !result {
+		t.Error("checkGcloud failed: gcloud is not installed or not in the system's PATH.")
+	}
+}
+
 func TestCheckDuplicateLocalPorts(t *testing.T) {
 	configData := `
-kubeconfig: /path/to/your/kubeconfig.yaml
-bastion:
-  name: bastion
-  connections:
-    - local_port: 5434
-      remote_host: 10.116.48.59
-      remote_port: 5432
-    - local_port: 5435
-      remote_host: 10.116.48.60
-      remote_port: 5432
-rules:
-  - namespace: your-namespace-1
-    pod_name: your-pod-name-1
-    local_port: 8080
-    remote_port: 80
-  - namespace: your-namespace-2
-    pod_name: your-pod-name-2
-    local_port: 8081
-    remote_port: 80
+environment: staging
+
+cloud:
+  kubeconfig: /path/to/your/kubeconfig.yaml
+  gcloudconfig: /path/to/your/gcloudconfig.yaml
+
+proxies:
+  - proxy:
+    environment: staging
+    cloud_project: okcredit-staging-env
+    bastion:
+      name: bastion
+      connections:
+        - local_port: 5435
+          remote_host: 10.120.52.48
+          remote_port: 5432
+        - local_port: 5434
+          remote_host: 10.116.48.59
+          remote_port: 5432
+        - local_port: 6378
+          remote_host: 10.116.50.3
+          remote_port: 6379
+    workloads:
+      - namespace: enr
+        app: cashfree
+        local_port: 8080
+        remote_port: 8080
+  - proxy:
+    environment: production
+    cloud_project: okcredit-42
+    bastion:
+      name: bastion
+      connections:
+        - local_port: 5435
+          remote_host: 10.120.49.38
+          remote_port: 5432
+    workloads:
+      - namespace: enr
+        app: cashfree
+        local_port: 8080
+        remote_port: 8080
 `
 
 	var config Config
@@ -46,7 +78,16 @@ rules:
 		t.Fatalf("Error parsing configuration data for TestCheckDuplicateLocalPorts: %v", err)
 	}
 
-	if checkDuplicateLocalPorts(config) {
+	// get the proxy configuration for the environment
+	var proxyConfig ProxyConfig
+	for _, proxy := range config.Proxies {
+		if proxy.Environment == config.Environment {
+			proxyConfig = proxy
+			break
+		}
+	}
+
+	if checkDuplicateLocalPorts(proxyConfig) {
 		t.Error("checkDuplicateLocalPorts failed: found duplicate local ports.")
 	}
 }
