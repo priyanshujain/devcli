@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -25,24 +26,29 @@ type Bastion struct {
 	Connections []Connection `yaml:"connections"`
 }
 
-type Rule struct {
+type Workload struct {
 	Namespace  string `yaml:"namespace"`
 	App        string `yaml:"app"`
 	LocalPort  int    `yaml:"local_port"`
 	RemotePort int    `yaml:"remote_port"`
 }
 
-type GCloudConfig struct {
-	Project    string `yaml:"project"`
-	ConfigPath string `yaml:"config_path"`
+type CloudConfig struct {
+	Gcloudconfig string `yaml:"gcloudconfig"`
+	Kubeconfig   string `yaml:"kubeconfig"`
+}
+
+type ProxyConfig struct {
+	Environment  string     `yaml:"environment"`
+	CloudProject string     `yaml:"cloud_project"`
+	Bastion      Bastion    `yaml:"bastion"`
+	Workloads    []Workload `yaml:"workloads"`
 }
 
 type Config struct {
-	Kubeconfig  string       `yaml:"kubeconfig"`
-	GCloud      GCloudConfig `yaml:"gcloud"`
-	Bastion     Bastion      `yaml:"bastion"`
-	Rules       []Rule       `yaml:"rules"`
-	Environment string       `yaml:"environment"`
+	Cloud       CloudConfig   `yaml:"cloud"`
+	Proxies     []ProxyConfig `yaml:"proxies"`
+	Environment string        `yaml:"environment"`
 }
 
 func checkKubectl(ctx context.Context) bool {
@@ -53,14 +59,22 @@ func checkKubectl(ctx context.Context) bool {
 	return true
 }
 
-func checkDuplicateLocalPorts(config Config) bool {
+func checkGcloud(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "gcloud", "version")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return true
+}
+
+func checkDuplicateLocalPorts(config ProxyConfig) bool {
 	localPorts := make(map[int]bool)
 
-	for _, rule := range config.Rules {
-		if localPorts[rule.LocalPort] {
+	for _, workload := range config.Workloads {
+		if localPorts[workload.LocalPort] {
 			return true
 		}
-		localPorts[rule.LocalPort] = true
+		localPorts[workload.LocalPort] = true
 	}
 
 	for _, connection := range config.Bastion.Connections {
@@ -91,6 +105,7 @@ func checkPortAvailable(port int) bool {
 func main() {
 	// Parse command line arguments
 	confFile := flag.String("conf", "", "Path to the configuration file")
+	environment := flag.String("env", "", "Environment type (dev, staging, prod)")
 	flag.Parse()
 
 	if *confFile == "" {
@@ -98,18 +113,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Read environment type from cmd line argument
-	environment := flag.String("env", "", "Environment type (dev, staging, prod)")
-	flag.Parse()
+	// Print devcli program header
+	fmt.Println("devcli - Development CLI")
+	fmt.Println("Initializing...")
 
 	// Create a context that will be used to cancel the port-forward commands
 	// when the program is interrupted
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// check if gcloud is installed and configured
+	if !checkGcloud(ctx) {
+		fmt.Println("Error: gcloud is not installed or not in the system's PATH.")
+		os.Exit(1)
+	}
+
 	// Check if kubectl is installed and configured
 	if !checkKubectl(ctx) {
 		fmt.Println("Error: kubectl is not installed or not in the system's PATH.")
+		os.Exit(1)
+	}
+
+	// log gcloud version
+	cmd := exec.CommandContext(ctx, "gcloud", "version")
+	fmt.Println("Using gcloud version:")
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	if err := cmd.Run(); err != nil {
+		fmt.Println("Error getting gcloud version:", err)
 		os.Exit(1)
 	}
 
@@ -134,20 +165,38 @@ func main() {
 	} else if *environment != "" {
 		config.Environment = *environment
 	}
+	fmt.Println("Setting up Environment:", config.Environment)
+
+	// get the proxy configuration for the environment
+	var proxyConfig ProxyConfig
+	for _, proxy := range config.Proxies {
+		if proxy.Environment == config.Environment {
+			proxyConfig = proxy
+			break
+		}
+	}
+	// print error if proxy configuration is not found
+	if proxyConfig.Environment == "" {
+		fmt.Println("Error: proxy configuration for environment", config.Environment, "is not found.")
+		os.Exit(1)
+	}
+	// print when proxy configuration is found
+	fmt.Println("Setting up proxy for environment", proxyConfig.Environment)
 
 	// get zone of the bastion instance using gcloud
-	cmd := exec.CommandContext(ctx, "gcloud", "compute", "instances", "describe", config.Bastion.Name, "--format", "value(zone)")
+	cmd = exec.CommandContext(ctx, "gcloud", "compute", "instances", "list", "--filter", fmt.Sprintf("name=%v", proxyConfig.Bastion.Name), "--format", "value(zone)")
 	cmd.Stderr = os.Stderr
 	zone, err := cmd.Output()
 	if err != nil {
 		fmt.Println("Error getting zone of the bastion instance:", err)
 		os.Exit(1)
 	} else {
-		config.Bastion.Zone = string(zone)
+		proxyConfig.Bastion.Zone = strings.Replace(string(zone), "\n", "", -1)
+		fmt.Println("Setting the Zone of the bastion instance:", proxyConfig.Bastion.Zone)
 	}
 
 	// Set the KUBECONFIG environment variable
-	if config.Kubeconfig == "" {
+	if config.Cloud.Kubeconfig == "" {
 		fmt.Println("kubeconfig is not set in the configuration file.")
 		// get default kubeconfig path from home directory
 		fmt.Println("Using default kubeconfig path: $HOME/.kube/config")
@@ -156,12 +205,13 @@ func main() {
 			fmt.Println("Error getting home directory:", err)
 			os.Exit(1)
 		}
-		config.Kubeconfig = fmt.Sprintf("%s/.kube/config", home)
+		config.Cloud.Kubeconfig = fmt.Sprintf("%s/.kube/config", home)
 	}
-	os.Setenv("KUBECONFIG", config.Kubeconfig)
+	fmt.Println("Using the KUBECONFIG from:", config.Cloud.Kubeconfig)
+	os.Setenv("KUBECONFIG", config.Cloud.Kubeconfig)
 
-	gcloudProjectName := config.GCloud.Project
-	gcloudConfigPath := config.GCloud.ConfigPath
+	gcloudProjectName := proxyConfig.CloudProject
+	gcloudConfigPath := config.Cloud.Gcloudconfig
 
 	// Set the CLOUDSDK_CONFIG environment variable
 	if gcloudConfigPath == "" {
@@ -175,6 +225,7 @@ func main() {
 		}
 		gcloudConfigPath = fmt.Sprintf("%s/.config/gcloud", home)
 	}
+	fmt.Println("Using the gcloud config from:", gcloudConfigPath)
 	os.Setenv("CLOUDSDK_CONFIG", gcloudConfigPath)
 
 	// check if the project is set
@@ -184,21 +235,24 @@ func main() {
 	}
 
 	// Check if there are duplicate local ports
-	if checkDuplicateLocalPorts(config) {
+	if checkDuplicateLocalPorts(proxyConfig) {
 		fmt.Println("Error: there are duplicate local ports in the configuration file.")
 		os.Exit(1)
 	}
 
 	// check if the port on local machine is available
-	for _, rule := range config.Rules {
-		if !checkPortAvailable(rule.LocalPort) {
-			fmt.Printf("Error: port %d is not available on local machine.\n", rule.LocalPort)
+	for _, workload := range proxyConfig.Workloads {
+		if !checkPortAvailable(workload.LocalPort) {
+			fmt.Printf("Error: port %d is not available on local machine.\n", workload.LocalPort)
 			os.Exit(1)
 		}
 	}
 
 	// set gcloud project
+	fmt.Println("Setting the gcloud project:", gcloudProjectName)
 	cmd = exec.CommandContext(ctx, "gcloud", "config", "set", "project", gcloudProjectName)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
 	if err := cmd.Run(); err != nil {
 		fmt.Println("Error setting gcloud project:", err)
 		os.Exit(1)
@@ -206,13 +260,17 @@ func main() {
 
 	// get cluster list and set the first cluster as the default cluster
 	var defaultClusterName string
+	fmt.Println("Getting the default cluster:")
 	cmd = exec.CommandContext(ctx, "gcloud", "container", "clusters", "list", "--format", "value(name)")
 	if out, err := cmd.Output(); err != nil {
 		fmt.Println("Error getting cluster list:", err)
 		os.Exit(1)
 	} else {
-		defaultClusterName = string(out)
+		defaultClusterName = strings.Replace(string(out), "\n", "", -1)
+		fmt.Println("Setting the default cluster:", defaultClusterName)
 		cmd = exec.CommandContext(ctx, "gcloud", "config", "set", "container/cluster", defaultClusterName)
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = os.Stdout
 		if err := cmd.Run(); err != nil {
 			fmt.Println("Error setting gcloud cluster:", err)
 			os.Exit(1)
@@ -221,25 +279,40 @@ func main() {
 
 	// get cluster region
 	var defaultClusterRegion string
+	fmt.Println("Getting the default cluster region:")
 	cmd = exec.CommandContext(ctx, "gcloud", "container", "clusters", "list", "--format", "value(location)")
 	if out, err := cmd.Output(); err != nil {
 		fmt.Println("Error getting cluster region:", err)
 		os.Exit(1)
 	} else {
-		defaultClusterRegion = string(out)
+		defaultClusterRegion = strings.Replace(string(out), "\n", "", -1)
+		fmt.Println("Setting the default cluster region:", defaultClusterRegion)
 		cmd = exec.CommandContext(ctx, "gcloud", "config", "set", "compute/region", defaultClusterRegion)
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = os.Stdout
 		if err := cmd.Run(); err != nil {
 			fmt.Println("Error setting gcloud region:", err)
 			os.Exit(1)
 		}
 	}
 
+	// set env for gcloud export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+	fmt.Println("Setting the environment variable for gcloud auth plugin.")
+	os.Setenv("USE_GKE_GCLOUD_AUTH_PLUGIN", "True")
+
 	// get credentials for the default cluster
+	fmt.Println("Getting the credentials for the default cluster:", defaultClusterName)
 	cmd = exec.CommandContext(ctx, "gcloud", "container", "clusters", "get-credentials", defaultClusterName)
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
 	if err := cmd.Run(); err != nil {
 		fmt.Println("Error getting cluster credentials:", err)
 		os.Exit(1)
 	}
+	fmt.Println("Successfully got the credentials for the default cluster.")
+
+	// Print initialization complete
+	fmt.Println("Initialization complete.")
 
 	// Listen for SIGINT and SIGTERM signals
 	ch := make(chan os.Signal, 2)
@@ -252,26 +325,38 @@ func main() {
 		// Cancel the context
 		cancel()
 		<-ch
-		fmt.Println("Interrupted again. Exiting immediately...")
+		fmt.Println("Interrupted again. Force exiting immediately...")
 		os.Exit(1)
 	}()
 
-	// Run the kubectl port-forward command for each rule
+	// Run the kubectl port-forward command for each workload
 	var wg sync.WaitGroup
-	for _, rule := range config.Rules {
+	fmt.Println("Starting the port-forwarding proxy...")
+	for _, workload := range proxyConfig.Workloads {
 		wg.Add(1)
-		go func(rule Rule) {
+		go func(workload Workload) {
 			defer wg.Done()
 
 			// get first pod using workload name
-			cmd := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", rule.Namespace, "-l", fmt.Sprintf("app=%s", rule.App), "-o", "jsonpath={.items[0].metadata.name}")
+			var podName string
+			fmt.Println("Getting the first pod for workload:", workload.App)
+			// get the first running pod for the workload
+			cmd := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", workload.Namespace, "-l", fmt.Sprintf("app=%s", workload.App), "-o", "jsonpath={.items[?(@.status.phase=='Running')].metadata.name}")
 			if out, err := cmd.Output(); err != nil {
-				fmt.Printf("Error getting pod name for app %s: %v\n", rule.App, err)
+				fmt.Printf("Error getting pod name for app %s: %v\n", workload.App, err)
 			} else {
-				podName := string(out)
-				cmd = exec.CommandContext(ctx, "kubectl", "port-forward", fmt.Sprintf("--namespace=%s", rule.Namespace), podName, fmt.Sprintf("%d:%d", rule.LocalPort, rule.RemotePort))
+				podList := strings.Split(strings.Replace(string(out), "\n", "", -1), " ")
+				if len(podList) == 0 {
+					fmt.Printf("No running pod found for app %s in namespace %s with label app=%s in the cluster.\n", workload.App, workload.Namespace, workload.App)
+					return
+				} else {
+					podName = podList[0]
+				}
+				fmt.Printf("Got the first pod for workload %s: %s in namespace %s \n", workload.App, podName, workload.Namespace)
+				// run kubectl port-forward
+				cmd = exec.CommandContext(ctx, "kubectl", "port-forward", fmt.Sprintf("--namespace=%s", workload.Namespace), podName, fmt.Sprintf("%d:%d", workload.LocalPort, workload.RemotePort))
 				cmd.Stderr = os.Stderr
-				fmt.Printf("Running kubectl port-forward for pod %s\n", podName)
+				fmt.Printf("Connecting kubectl port-forward for app %s from remote port %d to local port %d\n", workload.App, workload.RemotePort, workload.LocalPort)
 				if err := cmd.Run(); err != nil {
 					// If the context was canceled, don't print an error
 					if ctx.Err() != nil {
@@ -280,20 +365,21 @@ func main() {
 					fmt.Printf("Error running kubectl port-forward for pod %s: %v\n", podName, err)
 				}
 			}
-		}(rule)
+		}(workload)
 	}
 
 	// Connect to the bastion server and forward the connections
-	for _, connection := range config.Bastion.Connections {
-		cmd := connectBastion(ctx, config.Bastion, connection)
-		fmt.Printf("Connecting to remote host %s via bastion server on port %d\n", connection.RemoteHost, connection.LocalPort)
+	fmt.Println("Starting the bastion server connection proxy...")
+	for _, connection := range proxyConfig.Bastion.Connections {
+		cmd := connectBastion(ctx, proxyConfig.Bastion, connection)
+		fmt.Printf("Connecting to remote host %s via bastion server from remote port %d to local port %d\n", connection.RemoteHost, connection.RemotePort, connection.LocalPort)
 		go func(connection Connection) {
 			if err := cmd.Run(); err != nil {
 				// If the context was canceled, don't print an error
 				if ctx.Err() != nil {
 					return
 				}
-				fmt.Printf("Error connecting to the remote host %s via bastion server %s: %v\n", connection.RemoteHost, config.Bastion.Name, err)
+				fmt.Printf("Error connecting to the remote host %s via bastion server %s: %v\n", connection.RemoteHost, proxyConfig.Bastion.Name, err)
 			}
 		}(connection)
 	}
