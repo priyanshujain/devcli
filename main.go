@@ -109,8 +109,29 @@ func main() {
 	flag.Parse()
 
 	if *confFile == "" {
-		flag.Usage()
-		os.Exit(1)
+		// take default configuration file path from home directory
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Println("Error getting user home directory:", err)
+			os.Exit(1)
+		}
+		*confFile = fmt.Sprintf("%s/.devcli/config.yaml", homeDir)
+		// check if default configuration file exists
+		if _, err := os.Stat(*confFile); os.IsNotExist(err) {
+			// if default configuration file does not exist, create it
+			err := os.MkdirAll(fmt.Sprintf("%s/.devcli", homeDir), 0755)
+			if err != nil {
+				fmt.Println("Error creating default configuration file:", err)
+				os.Exit(1)
+			}
+			// default configuration file content
+			defaultConfig := ``
+			err = os.WriteFile(*confFile, []byte(defaultConfig), 0644)
+			if err != nil {
+				fmt.Println("Error writing default configuration file:", err)
+				os.Exit(1)
+			}
+		}
 	}
 
 	// Print devcli program header
