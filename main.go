@@ -132,6 +132,14 @@ func main() {
 				os.Exit(1)
 			}
 		}
+	} else {
+		// print configuration file path
+		fmt.Println("Using configuration file:", *confFile)
+		// check if configuration file exists
+		if _, err := os.Stat(*confFile); os.IsNotExist(err) {
+			fmt.Println("Error: configuration file does not exist at given path.")
+			os.Exit(1)
+		}
 	}
 
 	// Print devcli program header
@@ -372,6 +380,10 @@ func main() {
 					return
 				} else {
 					podName = podList[0]
+				}
+				if podName == "" {
+					fmt.Printf("No running pod found for app %s in namespace %s with label app=%s in the cluster.\n", workload.App, workload.Namespace, workload.App)
+					return
 				}
 				fmt.Printf("Got the first pod for workload %s: %s in namespace %s \n", workload.App, podName, workload.Namespace)
 				// run kubectl port-forward
