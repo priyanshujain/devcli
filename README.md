@@ -22,12 +22,9 @@ devcli -conf config.yaml
 ```
 
 ## Install
-```
-go get github.com/okcredit/devcli
-```
 
 ```
-go install github.com/okcredit/devcli
+go install github.com/okcredit/devcli@latest
 ```
 
 ## Configure
